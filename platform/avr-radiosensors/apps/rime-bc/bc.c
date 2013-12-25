@@ -4,12 +4,10 @@
 
   Almost all code comes from:
 
-  * Copyright (c) 2007, Swedish Institute of Computer Science.
+ * Copyright (c) 2007, Swedish Institute of Computer Science.
  * All rights reserved.
  *
-
   See Contiki for full copyright.
-
 */
 
 #include <avr/sleep.h>
@@ -20,7 +18,12 @@
 #include "lib/random.h"
 #include "net/rime.h"
 #include <stdio.h>
-#include "pluto_v1.4.h"
+//#include <time.h>
+#include "pin_assignment_v2.3.h"
+#include <avr/io.h>
+#include "shell.h"
+#include "serial-shell.h"
+#include "dev/serial-line.h"
 
 #define MAX_NEIGHBORS 64
 #define SIZE          40
@@ -62,12 +65,57 @@ static struct broadcast_conn broadcast;
 PROCESS(init_process, "Init process");
 PROCESS(broadcast_process, "Broadcast process");
 
-AUTOSTART_PROCESSES(&init_process, &broadcast_process);
+/* The Shell commands initialised here
+ * 1. The Report Interval Command rint <n> where n represents periodicity in seconds 
+ * 2. The Report Mask command rmask <n> where n represents the 8 bit mask for data fields
+ *    in the broadcast report   
+*/
 
+#ifdef SHELL_INTERFACE
+PROCESS(rint_process , "Set Report Interval");
+SHELL_COMMAND( rint_command, 
+               "rint", 
+               "rint <number> [Here the \"number\" represents the report periodicity in seconds]", 
+               &rint_process) ;
+
+PROCESS( rmask_process , "Set Report Mask");
+SHELL_COMMAND( rmask_command, 
+               "rmask", 
+               "rmask <number> [Here the \"number\" denotes the 8 bit mask for the data fields in the Sensor Report]",
+               &rmask_process) ;
+#endif
+
+/* -----------------------------------------------------------------------------------------------------------------*/
+
+//AUTOSTART_PROCESSES(&init_process, &broadcast_process);
+
+
+PROCESS(test_serial, "Serial line test process");
+AUTOSTART_PROCESSES( &init_process,&test_serial, &broadcast_process);
+ 
+PROCESS_THREAD(test_serial, ev, data)
+{
+   PROCESS_BEGIN();
+
+   printf("Process begins for test_serial !! \n") ;
+   for(;;) {
+
+     printf("Waiting for EV = %d to be equal to  serial_line_event_message = %d\n",ev, serial_line_event_message);
+     PROCESS_YIELD_UNTIL(ev == serial_line_event_message);
+     printf("Serial Line Test Process Polled:  EV = %d\n",ev) ;
+     if(ev == serial_line_event_message) {
+       printf("received line: %s\n", (char *)data);
+     } else {
+ 	printf("This shit suxx ev = %d\n", ev) ;
+     }
+   }
+   	
+   PROCESS_END();
+}
 
 int radio_sleep = 0;
 
-#define RTC_SCALE 16
+#define RTC_SCALE 30
 
 static void rtcc_init(void)
 {
@@ -80,8 +128,9 @@ static void rtcc_init(void)
   TIMSK2 |= (1<<TOIE2);  
 }
 
+
 ISR(TIMER2_OVF_vect)
-{
+{ 
   static int rtc = RTC_SCALE;
   
   if (--rtc == 0 ) {
@@ -91,6 +140,8 @@ ISR(TIMER2_OVF_vect)
       process_post(&broadcast_process, 0x12, NULL);
   }
 }
+
+
 
 void read_sensors(void)
 {
@@ -176,6 +227,7 @@ static void broadcast_recv(struct broadcast_conn *c, const rimeaddr_t *from)
          (int)(n->avg_seqno_gap / SEQNO_EWMA_UNITY),
          (int)(((100UL * n->avg_seqno_gap) / SEQNO_EWMA_UNITY) % 100));
 
+  PORTE |= LED_RED;  /* OFF */
 out:
   PORTE |= LED_RED;  /* OFF */
 }
@@ -211,6 +263,11 @@ PROCESS_THREAD(broadcast_process, ev, data)
   // rf230_set_channel(ch);
   printf("Ch=%-d TxPwr=%-d\n", ch, txpwr);
 
+  
+// Just read the EUI64 address and the serial number from the at24mac chip
+//  at24mac_read(1,1,0) ;
+
+
   while(1) {
     int len;
 
@@ -230,7 +287,7 @@ PROCESS_THREAD(broadcast_process, ev, data)
     broadcast_send(&broadcast);
 
     seqno++;
-
+   
     printf("&: %s\n", msg.buf);
 
     PORTE |= LED_YELLOW; 
@@ -243,7 +300,6 @@ PROCESS_THREAD(init_process, ev, data)
   PROCESS_BEGIN();
 
   printf("Init\n");
-
   DDRE |= LED_YELLOW;
   DDRE |= LED_RED;
 
@@ -253,8 +309,39 @@ PROCESS_THREAD(init_process, ev, data)
   DDRD |= (1<<4);
 
   rtcc_init();
+
+//  serial line init !!! 
+//   serial_line_init();
   
+// Registering the shell commands - maneesh 14/12/2013	 
+#ifdef SHELL_INTERFACE 
+  serial_shell_init();
+  printf("serial_shell_init()\n");
+  shell_register_command(&rint_command);
+  printf("registered rint command\n");
+  shell_register_command(&rmask_command);
+  printf("registered rmask command\n"); 
+#endif 
+ 
   PROCESS_END();
+}
+
+
+PROCESS_THREAD(rint_process, ev, data)
+{
+  PROCESS_BEGIN();
+  
+  printf("Shell Command \"rint\" invoked\n");
+
+  PROCESS_END() ; 
+}
+
+PROCESS_THREAD(rmask_process, ev, data)
+{
+  PROCESS_BEGIN();
+  
+  printf("Shell Command \"rmask\" invoked\n") ;
+  PROCESS_END() ;
 }
 
 static struct pt send_thread;
